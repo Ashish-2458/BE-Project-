@@ -1,0 +1,20 @@
+# Describe Scenario Feature Requirements
+
+# Computer Vision
+opencv-python==4.8.1.78
+
+# Text-to-Speech
+pyttsx3==2.90
+
+# HTTP Requests
+requests==2.31.0
+
+# Image Processing
+Pillow==10.0.1
+
+# Base64 encoding (built-in)
+# JSON handling (built-in)
+# Threading (built-in)
+
+# Optional: Windows-specific TTS (if available)
+# pywin32==306

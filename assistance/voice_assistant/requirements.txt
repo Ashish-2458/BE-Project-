@@ -1,0 +1,19 @@
+# AI Voice Assistant Requirements
+
+# Core dependencies
+requests>=2.31.0
+pyttsx3>=2.90
+
+# Speech recognition
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.11
+
+# Windows-specific (optional but recommended)
+pywin32>=306
+
+# Audio processing (alternative to pyaudio if needed)
+# sounddevice>=0.4.6
+# soundfile>=0.12.1
+
+# Development and testing
+pytest>=7.4.0
