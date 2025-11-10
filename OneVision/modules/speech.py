@@ -35,7 +35,7 @@ class TextToSpeech:
     
     def speak(self, text: str, priority: bool = False, interrupt: bool = False):
         """
-        Add text to speech queue
+        Add text to speech queue with smart queue management
         
         Args:
             text: Text to speak
@@ -45,24 +45,46 @@ class TextToSpeech:
         if not text or not text.strip():
             return
         
+        current_time = time.time()
+        
         if interrupt:
             self.stop_current_speech()
-            # Clear queue for urgent messages
+            # Clear entire queue for immediate response
+            self._clear_queue_internal()
+        
+        # Smart queue management - keep only latest 3 items
+        queue_size = self.speech_queue.qsize()
+        if queue_size >= 3:
+            # Remove oldest items, keep only the most recent 2
+            all_items = []
             while not self.speech_queue.empty():
                 try:
-                    self.speech_queue.get_nowait()
+                    all_items.append(self.speech_queue.get_nowait())
                 except queue.Empty:
                     break
+            
+            # Keep only the latest 2 items if queue is full
+            if len(all_items) >= 3:
+                items_to_keep = all_items[-2:]  # Keep the 2 most recent
+                items_removed = len(all_items) - 2
+                if items_removed > 0:
+                    print(f"🗑️  Discarded {items_removed} old speech items")
+            else:
+                items_to_keep = all_items
+            
+            # Put back items to keep
+            for item in items_to_keep:
+                self.speech_queue.put(item)
         
-        # Add to queue
+        # Add new speech item
         speech_item = {
             'text': text.strip(),
-            'timestamp': time.time(),
+            'timestamp': current_time,
             'priority': priority
         }
         
         if priority and not interrupt:
-            # For priority items, we need to restructure queue
+            # For priority items, add to front
             items = []
             while not self.speech_queue.empty():
                 try:
@@ -72,9 +94,10 @@ class TextToSpeech:
             
             # Put priority item first
             self.speech_queue.put(speech_item)
-            # Put back other items
-            for item in items:
-                self.speech_queue.put(item)
+            # Put back other items (but limit to 1 more)
+            for i, item in enumerate(items):
+                if i < 1:  # Only keep 1 additional item
+                    self.speech_queue.put(item)
         else:
             self.speech_queue.put(speech_item)
     
@@ -155,11 +178,19 @@ class TextToSpeech:
     
     def clear_queue(self):
         """Clear all pending speech"""
+        self._clear_queue_internal()
+    
+    def _clear_queue_internal(self):
+        """Internal method to clear queue"""
+        cleared_count = 0
         while not self.speech_queue.empty():
             try:
                 self.speech_queue.get_nowait()
+                cleared_count += 1
             except queue.Empty:
                 break
+        if cleared_count > 0:
+            print(f"🗑️  Cleared {cleared_count} pending speech items")
     
     def is_busy(self) -> bool:
         """Check if currently speaking or has items in queue"""

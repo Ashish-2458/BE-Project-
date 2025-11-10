@@ -29,19 +29,11 @@ class GeminiClient:
             # Create detection summary
             detection_text = self._format_detections(detections)
             
-            prompt = f"""You are an AI assistant helping a blind person navigate. Based on these object detections, provide a clear, concise description of what's in their view. 
+            prompt = f"""Describe what's in view for navigation. Be direct and brief.
 
-IMPORTANT: Be direct and informative. Do NOT use phrases like "Okay, I'm here to help" or "Let me tell you". Just describe what you see.
+Objects detected: {detection_text}
 
-Focus on:
-1. Most important objects and their locations (use simple directions like "in front", "to your left", "to your right")
-2. Any potential obstacles or safety concerns
-3. Spatial relationships between objects
-4. Keep it conversational but direct
-
-Detections: {detection_text}
-
-Provide a natural, direct description in 1-2 sentences:"""
+Give a quick, clear description in 1 sentence:"""
 
             payload = {
                 "contents": [

@@ -25,6 +25,8 @@ cd assistance/voice_assistant
 python voice_assistant.py
 
 python working_voice_assistant.py
+
+python fast_voice_assistant.py
 ```
 
 **Wake words:** "hey assistant", "voice assistant", "help me"

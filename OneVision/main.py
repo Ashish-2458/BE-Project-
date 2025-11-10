@@ -122,9 +122,9 @@ class AssistiveVisionSystem:
             change_ratio = 1.0 - (intersection / union if union > 0 else 0)
         
         significant_change = (
-            change_ratio > 0.1 or  # 10% change in objects (very sensitive)
+            change_ratio > 0.5 or  # 50% change in objects (much less sensitive)
             len(current_objects) != len(self.previous_objects) or
-            time.time() - self.last_description_time > 6.0  # Force full update every 6 seconds
+            time.time() - self.last_description_time > 5.0  # Force update every 5 seconds
         )
         
         if significant_change:
@@ -133,48 +133,42 @@ class AssistiveVisionSystem:
         return significant_change
     
     def generate_audio_feedback(self, detections: List[Dict]):
-        """Generate appropriate audio feedback based on detections"""
+        """Generate immediate audio feedback using Gemini LLM"""
         current_time = time.time()
         
-        # Force speech every 4 seconds with quick descriptions
-        time_since_last_speech = current_time - self.last_quick_speech_time
-        
-        if time_since_last_speech >= 4.0:  # Every 4 seconds guaranteed
-            if detections:
-                # Use quick description for frequent updates
-                quick_desc = self.llm_client.get_quick_description(detections)
-                self.tts.speak(quick_desc)
-                self.last_quick_speech_time = current_time
-                print(f"🗣️  Quick: {quick_desc}")
-            else:
-                self.tts.speak("Path clear.")
-                self.last_quick_speech_time = current_time
-                print("🗣️  Quick: Path clear.")
-        
-        # Generate detailed scene description if scene changed significantly
-        elif self.analyze_scene_changes(detections):
-            # Every 3rd speech should be detailed (using API)
-            self.speech_counter += 1
-            if self.speech_counter % 3 == 0:
-                try:
+        # Only generate feedback if scene has changed significantly
+        if self.analyze_scene_changes(detections):
+            try:
+                if detections:
+                    # Always use Gemini for immediate, context-aware responses
                     description = self.llm_client.describe_scene(detections)
                     if description:
-                        self.tts.speak(description)
+                        # Use priority but don't interrupt unless it's urgent
+                        self.tts.speak(description, priority=True, interrupt=False)
                         self.last_description_time = current_time
-                        self.last_quick_speech_time = current_time  # Reset quick speech timer
-                        print(f"🗣️  Detailed: {description}")
-                except Exception as e:
-                    # Fallback to quick description if API fails
+                        print(f"🗣️  Gemini: {description}")
+                    else:
+                        # Fallback if Gemini fails
+                        quick_desc = self.llm_client.get_quick_description(detections)
+                        self.tts.speak(quick_desc, priority=True, interrupt=False)
+                        print(f"🗣️  Fallback: {quick_desc}")
+                else:
+                    # Path is clear - only if not currently speaking
+                    if not self.tts.is_busy():
+                        self.tts.speak("Path is clear.", priority=False, interrupt=False)
+                        print("🗣️  Clear: Path is clear.")
+                    
+            except Exception as e:
+                print(f"❌ LLM Error: {e}")
+                # Emergency fallback
+                if detections:
                     quick_desc = self.llm_client.get_quick_description(detections)
-                    self.tts.speak(quick_desc)
-                    self.last_quick_speech_time = current_time
-                    print(f"🗣️  Fallback: {quick_desc}")
-            else:
-                # Use quick description for immediate feedback
-                quick_desc = self.llm_client.get_quick_description(detections)
-                self.tts.speak(quick_desc)
-                self.last_quick_speech_time = current_time
-                print(f"🗣️  Quick: {quick_desc}")
+                    self.tts.speak(quick_desc, priority=True, interrupt=False)
+                    print(f"🗣️  Emergency: {quick_desc}")
+                else:
+                    if not self.tts.is_busy():
+                        self.tts.speak("Path clear.", priority=False, interrupt=False)
+                        print("🗣️  Emergency: Path clear.")
     
     def run_visual_mode(self):
         """Run with visual display (for development/testing)"""
