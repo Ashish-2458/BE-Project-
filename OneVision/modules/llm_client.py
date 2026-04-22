@@ -1,134 +1,101 @@
+"""
+Gemini API client - smart navigation descriptions with rate limiting
+"""
 import requests
-import json
 import time
 from typing import List, Dict, Optional
 
 class GeminiClient:
-    """Gemini API client for scene interpretation and description"""
-    
     def __init__(self, api_key: str, api_url: str):
-        self.api_key = api_key
-        self.api_url = api_url
-        self.headers = {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': api_key
-        }
-        self.last_request_time = 0
-        self.min_request_interval = 0.5  # Faster API calls
-        self.last_description = ""
-        self.description_count = 0
-        
-    def describe_scene(self, detections: List[Dict]) -> str:
-        """Generate natural scene description from detections"""
+        self.api_key  = api_key
+        self.api_url  = api_url
+        self.headers  = {"Content-Type": "application/json",
+                         "X-goog-api-key": api_key}
+        self.last_call   = 0
+        self.min_interval = 4.0   # 15 req/min free tier
+        self.call_count  = 0
+
+    # ------------------------------------------------------------------ #
+    def describe_scene(self, detections: List[Dict],
+                       path_guidance: str = "") -> str:
+        """
+        Returns a spoken navigation sentence.
+        Uses Gemini if rate allows, otherwise fast local fallback.
+        """
+        now = time.time()
+        if now - self.last_call < self.min_interval:
+            return self._fallback(detections, path_guidance)
+
         try:
-            self._rate_limit()
-            
-            if not detections:
-                return "No objects detected in view."
-            
-            # Create detection summary
-            detection_text = self._format_detections(detections)
-            
-            prompt = f"""Describe what's in view for navigation. Be direct and brief.
+            det_text = self._fmt(detections)
+            path_txt = f"\nPath status: {path_guidance}" if path_guidance else ""
 
-Objects detected: {detection_text}
-
-Give a quick, clear description in 1 sentence:"""
+            prompt = (
+                "You are a navigation assistant for a blind person. "
+                "Give ONE short spoken sentence (max 15 words) describing "
+                "the most important obstacle and direction to move safely.\n\n"
+                f"Detected: {det_text}{path_txt}\n\n"
+                "Response (1 sentence only):"
+            )
 
             payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
+                "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
-                    "temperature": 0.4,  # More consistent responses
-                    "maxOutputTokens": 60,  # Shorter, faster responses
+                    "temperature": 0.3,
+                    "maxOutputTokens": 50,
                     "topP": 0.9,
                     "topK": 20
                 }
             }
-            
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json=payload,
-                timeout=5  # Faster timeout
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if 'candidates' in result and len(result['candidates']) > 0:
-                    content = result['candidates'][0]['content']['parts'][0]['text']
-                    return content.strip()
-                else:
-                    return self._generate_fallback_description(detections)
-            else:
-                print(f"Gemini API error: {response.status_code}")
-                return self._generate_fallback_description(detections)
-                
-        except Exception as e:
-            print(f"Error generating scene description: {e}")
-            return self._generate_fallback_description(detections)
-    
-    def _rate_limit(self):
-        """Ensure minimum time between API calls"""
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
-        if time_since_last < self.min_request_interval:
-            time.sleep(self.min_request_interval - time_since_last)
-        self.last_request_time = time.time()
-    
-    def _format_detections(self, detections: List[Dict]) -> str:
-        """Format detections for the prompt"""
-        formatted = []
-        for detection in detections[:5]:  # Limit to top 5 objects
-            obj_info = f"{detection['class_name']} ({detection['confidence']:.1f}%) at {detection['position']}"
-            formatted.append(obj_info)
-        return "; ".join(formatted)
-    
-    def _generate_fallback_description(self, detections: List[Dict]) -> str:
-        """Generate simple fallback when API fails"""
-        if not detections:
-            return "Clear path ahead."
-        
-        # Count people first (highest priority)
-        people = [d for d in detections if d['class_name'] == 'person']
-        if people:
-            person = people[0]
-            if len(people) == 1:
-                return f"Person {person['position']}. Navigate carefully."
-            else:
-                return f"{len(people)} people detected. Stay alert."
-        
-        # Other objects
-        main_obj = detections[0]
-        return f"{main_obj['class_name'].title()} {main_obj['position']}."
-    
-    def get_quick_description(self, detections: List[Dict]) -> str:
-        """Generate quick description without API call for frequent updates"""
-        if not detections:
-            return "Path is clear."
-        
-        # Prioritize people
-        people = [d for d in detections if d['class_name'] == 'person']
-        furniture = [d for d in detections if d['class_name'] in ['chair', 'table', 'couch', 'bed']]
-        vehicles = [d for d in detections if d['class_name'] in ['car', 'truck', 'bus', 'bicycle']]
-        
-        if people:
-            person = people[0]
-            distance_desc = "very close" if person['distance'] == 'very close' else "nearby"
-            return f"Person {distance_desc}, {person['position']}."
-        elif vehicles:
-            vehicle = vehicles[0]
-            return f"{vehicle['class_name'].title()} detected. Stay safe."
-        elif furniture:
-            item = furniture[0]
-            return f"{item['class_name'].title()} {item['position']}. Navigate around."
-        else:
-            return f"{detections[0]['class_name'].title()} ahead."
 
+            resp = requests.post(self.api_url, headers=self.headers,
+                                 json=payload, timeout=5)
+            self.last_call  = time.time()
+            self.call_count += 1
+
+            if resp.status_code == 200:
+                cands = resp.json().get("candidates", [])
+                if cands:
+                    return cands[0]["content"]["parts"][0]["text"].strip()
+            # 429 or other error → silent fallback
+            return self._fallback(detections, path_guidance)
+
+        except Exception:
+            return self._fallback(detections, path_guidance)
+
+    # ------------------------------------------------------------------ #
+    def get_quick_description(self, detections: List[Dict],
+                              path_guidance: str = "") -> str:
+        """Instant local description, no API call."""
+        return self._fallback(detections, path_guidance)
+
+    # ------------------------------------------------------------------ #
+    def _fmt(self, detections: List[Dict]) -> str:
+        parts = []
+        for d in detections[:4]:
+            dm  = d.get("distance_meters")
+            dst = f"{dm}m" if dm else d.get("distance", "?")
+            parts.append(f"{d['class_name']} {dst} {d['position']}")
+        return "; ".join(parts)
+
+    def _fallback(self, detections: List[Dict], path_guidance: str = "") -> str:
+        if not detections:
+            base = "Path clear"
+            return f"{base}. {path_guidance}." if path_guidance else f"{base}."
+
+        # Sort by danger + proximity
+        def priority(d):
+            dm = d.get("distance_meters") or 99
+            return (0 if d["is_danger"] else 1, dm)
+
+        top = sorted(detections, key=priority)[:2]
+        parts = []
+        for d in top:
+            dm  = d.get("distance_meters")
+            dst = f"{dm} meters" if dm else d.get("distance", "nearby")
+            parts.append(f"{d['class_name']} {dst} {d['position']}")
+
+        desc = ". ".join(parts)
+        if path_guidance and ("BLOCKED" in path_guidance or "Move" in path_guidance):
+            desc += f". {path_guidance}"
+        return desc + "."

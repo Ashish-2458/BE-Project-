@@ -1,115 +1,103 @@
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from typing import List, Dict, Tuple
+from typing import List, Dict
 import time
+
+# High-priority objects for navigation
+DANGER_CLASSES = {"person", "car", "truck", "bus", "motorcycle", "bicycle"}
+OBSTACLE_CLASSES = {"chair", "couch", "bed", "dining table", "toilet", "potted plant",
+                    "suitcase", "backpack", "umbrella", "handbag", "bottle", "cup"}
 
 class ObjectDetector:
     """YOLO-based object detection with spatial analysis"""
-    
+
     def __init__(self, model_path: str = "yolov8n.pt", confidence: float = 0.5):
         self.model = YOLO(model_path)
         self.confidence = confidence
         self.class_names = self.model.names
         self.last_detection_time = 0
-        
+
     def detect_objects(self, frame: np.ndarray) -> List[Dict]:
-        """
-        Detect objects in frame and return structured data
-        Returns list of detected objects with spatial information
-        """
         results = self.model(frame, conf=self.confidence, verbose=False)
         detections = []
-        
+
         if results and len(results) > 0:
             boxes = results[0].boxes
             if boxes is not None:
+                fw, fh = frame.shape[1], frame.shape[0]
                 for box in boxes:
-                    # Extract box coordinates and confidence
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    confidence = box.conf[0].cpu().numpy()
-                    class_id = int(box.cls[0].cpu().numpy())
-                    
-                    # Calculate spatial properties
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
-                    width = x2 - x1
-                    height = y2 - y1
-                    area = width * height
-                    
-                    # Determine spatial position
-                    frame_width = frame.shape[1]
-                    frame_height = frame.shape[0]
-                    
-                    # Horizontal position
-                    if center_x < frame_width * 0.33:
-                        h_position = "left"
-                    elif center_x > frame_width * 0.67:
-                        h_position = "right"
-                    else:
-                        h_position = "center"
-                    
-                    # Vertical position
-                    if center_y < frame_height * 0.33:
-                        v_position = "top"
-                    elif center_y > frame_height * 0.67:
-                        v_position = "bottom"
-                    else:
-                        v_position = "middle"
-                    
-                    # Distance estimation (rough approximation based on object size)
-                    relative_size = area / (frame_width * frame_height)
-                    if relative_size > 0.3:
-                        distance = "very close"
-                    elif relative_size > 0.1:
-                        distance = "close"
-                    elif relative_size > 0.02:
-                        distance = "medium distance"
-                    else:
-                        distance = "far"
-                    
-                    detection = {
-                        'class_name': self.class_names[class_id],
-                        'confidence': float(confidence),
-                        'bbox': [float(x1), float(y1), float(x2), float(y2)],
-                        'center': [float(center_x), float(center_y)],
-                        'size': [float(width), float(height)],
-                        'area': float(area),
-                        'position': f"{v_position} {h_position}",
-                        'distance': distance,
-                        'relative_size': float(relative_size)
-                    }
-                    
-                    detections.append(detection)
-        
-        # Sort by area (larger objects first)
-        detections.sort(key=lambda x: x['area'], reverse=True)
+                    conf  = float(box.conf[0].cpu().numpy())
+                    cid   = int(box.cls[0].cpu().numpy())
+                    name  = self.class_names[cid]
+
+                    cx = (x1 + x2) / 2
+                    cy = (y1 + y2) / 2
+                    area = (x2 - x1) * (y2 - y1)
+
+                    h_pos = "left" if cx < fw * 0.33 else ("right" if cx > fw * 0.67 else "center")
+                    v_pos = "top"  if cy < fh * 0.33 else ("bottom" if cy > fh * 0.67 else "middle")
+
+                    rel = area / (fw * fh)
+                    size_dist = ("very close" if rel > 0.3 else
+                                 "close"      if rel > 0.1 else
+                                 "medium"     if rel > 0.02 else "far")
+
+                    is_danger   = name in DANGER_CLASSES
+                    is_obstacle = name in OBSTACLE_CLASSES
+
+                    detections.append({
+                        "class_name":    name,
+                        "confidence":    conf,
+                        "bbox":          [float(x1), float(y1), float(x2), float(y2)],
+                        "center":        [float(cx), float(cy)],
+                        "area":          float(area),
+                        "position":      f"{v_pos} {h_pos}",
+                        "distance":      size_dist,
+                        "distance_meters": None,   # filled by depth module
+                        "is_danger":     is_danger,
+                        "is_obstacle":   is_obstacle,
+                        "relative_size": float(rel),
+                    })
+
+        detections.sort(key=lambda x: x["area"], reverse=True)
         self.last_detection_time = time.time()
-        
         return detections
-    
+
     def draw_detections(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
-        """Draw bounding boxes and labels on frame"""
-        annotated_frame = frame.copy()
-        
-        for detection in detections:
-            x1, y1, x2, y2 = detection['bbox']
-            class_name = detection['class_name']
-            confidence = detection['confidence']
-            position = detection['position']
-            distance = detection['distance']
-            
-            # Draw bounding box
-            cv2.rectangle(annotated_frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-            
-            # Create label
-            label = f"{class_name} ({confidence:.2f})"
-            spatial_info = f"{position}, {distance}"
-            
-            # Draw labels
-            cv2.putText(annotated_frame, label, (int(x1), int(y1) - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            cv2.putText(annotated_frame, spatial_info, (int(x1), int(y2) + 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
-        
-        return annotated_frame
+        out = frame.copy()
+        for det in detections:
+            x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+            dm   = det.get("distance_meters")
+            name = det["class_name"]
+
+            # Color by danger zone
+            if dm is not None:
+                if   dm < 1.5: color = (0, 0, 255)    # RED  - immediate
+                elif dm < 3.0: color = (0, 100, 255)   # ORANGE - close
+                elif dm < 6.0: color = (0, 220, 255)   # YELLOW - medium
+                else:          color = (0, 255, 80)    # GREEN - far
+            elif det["is_danger"]:
+                color = (0, 80, 255)
+            else:
+                color = (0, 255, 80)
+
+            dist_lbl = f"{dm}m" if dm else det["distance"]
+            label    = f"{name} {dist_lbl}"
+
+            # Box
+            thick = 3 if det["is_danger"] else 2
+            cv2.rectangle(out, (x1, y1), (x2, y2), color, thick)
+
+            # Label background
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)
+            cv2.rectangle(out, (x1, y1 - th - 8), (x1 + tw + 6, y1), color, -1)
+            cv2.putText(out, label, (x1 + 3, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 1)
+
+            # Position tag below box
+            cv2.putText(out, det["position"], (x1, y2 + 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
+
+        return out
