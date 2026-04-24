@@ -29,11 +29,11 @@ from ultralytics import YOLO
 CAMERA_INDEX     = 0
 FRAME_W, FRAME_H = 640, 480
 
-ZONE_DANGER  = 1.2   # metres - RED   stop immediately
-ZONE_WARN    = 2.5   # metres - ORANGE caution
-ZONE_NOTICE  = 5.0   # metres - YELLOW be aware
+ZONE_DANGER  = 0.5   # metres - RED   stop immediately (very close only)
+ZONE_WARN    = 1.5   # metres - ORANGE caution
+ZONE_NOTICE  = 3.5   # metres - YELLOW be aware
 
-SPEECH_CD = {"danger": 2.0, "warn": 3.5, "notice": 6.0, "clear": 10.0}
+SPEECH_CD = {"danger": 4.0, "warn": 6.0, "notice": 10.0, "clear": 12.0}
 
 ZONES = [
     ("far left",  0.00, 0.20),
@@ -99,7 +99,10 @@ class DepthEngine:
         return (255 - dm).astype(np.uint8)
 
     def to_meters(self, val: float) -> float:
-        return round(0.3 + ((255 - val) / 255.0) * 9.7, 1)
+        # val is 0-255 where higher = closer
+        # Use a wider range so not everything looks "close"
+        norm = (255 - val) / 255.0
+        return round(0.2 + norm * 12.0, 1)  # 0.2m to 12.2m range
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,8 +161,8 @@ class ZoneAnalyser:
             x1  = int(x1f * w)
             col = roi[:, x0:x1]
 
-            # 93rd percentile = closest real obstacle (robust to noise)
-            val    = float(np.percentile(col, 93))
+            # 85th percentile - robust to noise, ignores ceiling/walls
+            val    = float(np.percentile(col, 85))
             dist_m = engine.to_meters(val)
 
             level = ("danger" if dist_m <= ZONE_DANGER else
